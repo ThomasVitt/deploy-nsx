@@ -1,20 +1,30 @@
 import os
+from pathlib import Path
 
-from example.deploy import deploy
-from nsx_testkit.compare import load, report
-from nsx_testkit.normalize import normalize
-from nsx_testkit.record import save
+import pytest
 
-SNAPSHOT = os.path.join(os.path.dirname(__file__), "snapshots", "deploy.json")
+from example.deploy import NSXDeployer
+from nsx_testkit.compare import RecordingDiff
+from nsx_testkit.fake_nsx import FakeNSX
+from nsx_testkit.recording import Recording
 
 
-def test_deploy_api_calls_unchanged(nsx):
-    deploy(nsx.url)
-    assert len(nsx.calls) == 500
+class TestDeploySnapshot:
+    SNAPSHOT = Path(__file__).parent / "snapshots" / "deploy.json"
 
-    if os.environ.get("UPDATE_SNAPSHOT") or not os.path.exists(SNAPSHOT):
-        save(nsx.calls, SNAPSHOT)
-        return
+    @pytest.fixture
+    def nsx(self):
+        with FakeNSX() as server:
+            yield server
 
-    text, differs = report(load(SNAPSHOT), normalize(nsx.calls))
-    assert not differs, "API calls changed vs snapshot:\n" + text
+    def test_deploy_api_calls_unchanged(self, nsx):
+        NSXDeployer(nsx.url).deploy()
+        assert len(nsx.calls) == 500
+        current = Recording.from_raw(nsx.calls)
+
+        if os.environ.get("UPDATE_SNAPSHOT") or not self.SNAPSHOT.exists():
+            current.save(self.SNAPSHOT)
+            return
+
+        diff = RecordingDiff.between(Recording.load(self.SNAPSHOT), current)
+        assert not diff.differs, "API calls changed vs snapshot:\n" + diff.report()
